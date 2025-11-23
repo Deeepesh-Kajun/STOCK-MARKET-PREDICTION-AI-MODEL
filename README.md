@@ -24,20 +24,6 @@ Data Manipulation: Pandas, NumPy
 
 Data Source: Yahoo Finance API
 
-⚙️ Installation & Usage
-Clone the Repository
-
-Bash
-git clone https://github.com/[YourUsername]/AI-Intraday-Stock-Predictor.git
-cd AI-Intraday-Stock-Predictor
-Install Dependencies
-
-Bash
-pip install -r requirements.txt
-Run the Predictor
-
-Bash
-python main.py
 📊 Methodology
 The system architecture follows a strict data mining workflow:
 
