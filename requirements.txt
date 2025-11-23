@@ -1,1 +1,7 @@
-#include <stdio.h>
+yfinance
+pandas
+numpy
+matplotlib
+scikit-learn
+statsmodels
+tensorflow
