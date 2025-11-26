@@ -5,8 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.arima.model import ARIMA
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout
+from sklearn.neural_network import MLPRegressor
 import datetime
 
 # ==========================================
@@ -18,16 +17,28 @@ def get_stock_data(ticker, start_date, end_date):
     Fetches historical stock data from Yahoo Finance.
     """
     print(f"Fetching data for {ticker}...")
-    data = yf.download(ticker, start=start_date, end=end_date)
-    
-    # Ensure we only keep the 'Close' column for simplicity in this example
-    # The Base Paper suggests using Open, High, Low, Vol, but for the specific 
-    # ARIMA vs ANN comparison, Close price is the standard target.
+    try:
+        data = yf.download(ticker, start=start_date, end=end_date)
+    except Exception as e:
+        print(f"Warning: failed to download data for {ticker}: {e}")
+        data = pd.DataFrame()
+
+    # If download failed or returned empty, generate synthetic demo data
+    if data is None or data.empty:
+        print("Warning: no data fetched; generating synthetic demo data.")
+        dates = pd.bdate_range(start=start_date, end=end_date)
+        np.random.seed(42)
+        # random walk around 100
+        prices = 100 + np.cumsum(np.random.normal(loc=0, scale=1, size=len(dates)))
+        df = pd.DataFrame(index=dates, data={'Close': prices})
+        return df
+
+    # Ensure we only keep the 'Close' column for simplicity
     df = data[['Close']].copy()
-    
+
     # Filling missing values if any (Data Cleaning)
-    df = df.fillna(method='ffill')
-    
+    df = df.ffill()
+
     return df
 
 def add_technical_indicators(df):
@@ -36,18 +47,19 @@ def add_technical_indicators(df):
     (Based on the methodology from Venkatarathnam et al. [cite: 1343])
     """
     # 1. Moving Averages (Technical Indicator)
-    df['MA_10'] = df['Close'].rolling(window=10).mean()
-    df['MA_50'] = df['Close'].rolling(window=50).mean()
+    # Use min_periods=1 to avoid dropping too many rows on small datasets
+    df['MA_10'] = df['Close'].rolling(window=10, min_periods=1).mean()
+    df['MA_50'] = df['Close'].rolling(window=50, min_periods=1).mean()
     
     # 2. Relative Strength Index (RSI)
     delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # Drop NaN values created by rolling windows
-    df.dropna(inplace=True)
+    # Keep rows even if early windows are smaller; forward-fill any leftover NaNs
+    df = df.ffill()
     return df
 
 # ==========================================
@@ -85,18 +97,9 @@ def create_ann_model(input_dim):
     Builds a standard Feed-Forward Neural Network (MLP).
     ANNs identify complex, non-linear patterns.
     """
-    model = Sequential()
-    # Input Layer + 1st Hidden Layer (50 Neurons, ReLU activation)
-    model.add(Dense(50, input_dim=input_dim, activation='relu'))
-    # Dropout layer to prevent overfitting (Coding Skill requirement)
-    model.add(Dropout(0.2))
-    # 2nd Hidden Layer
-    model.add(Dense(25, activation='relu'))
-    # Output Layer (1 Neuron for predicted price)
-    model.add(Dense(1))
-    
-    model.compile(loss='mean_squared_error', optimizer='adam')
-    return model
+    # Use scikit-learn's MLPRegressor as a lightweight ANN alternative
+    # hidden_layer_sizes mirrors the original (50, 25)
+    return MLPRegressor(hidden_layer_sizes=(50, 25), activation='relu', solver='adam', max_iter=500, random_state=42)
 
 def train_predict_ann(df):
     print("\nRunning ANN Model...")
@@ -125,23 +128,24 @@ def train_predict_ann(df):
         
     x_train, y_train = np.array(x_train), np.array(y_train)
     
-    # Build and Train Model
+    # Build and Train Model (scikit-learn)
     model = create_ann_model(input_dim=x_train.shape[1])
-    model.fit(x_train, y_train, epochs=25, batch_size=32, verbose=1)
-    
+    model.fit(x_train, y_train)
+
     # Preparing Test Data
     test_set = scaled_data[train_len - prediction_days:]
     x_test = []
-    
+
     for i in range(prediction_days, len(test_set)):
         x_test.append(test_set[i-prediction_days:i, 0])
-        
+
     x_test = np.array(x_test)
-    
+
     # Predicting
     predictions = model.predict(x_test)
-    predictions = scaler.inverse_transform(predictions) # Scale back to actual price
-    
+    # scaler expects 2D input for inverse_transform
+    predictions = scaler.inverse_transform(predictions.reshape(-1, 1))
+
     return predictions, train_len
 
 # ==========================================
@@ -170,7 +174,16 @@ if __name__ == "__main__":
     ann_preds, train_len = train_predict_ann(df)
     
     # 5. Evaluation (RMSE)
-    # We trim ANN predictions to match test_data length if necessary
+    # Convert predictions to 1-D numeric arrays and align lengths with test set
+    arima_preds = np.array(arima_preds)
+    ann_preds = np.array(ann_preds).reshape(-1)
+
+    # Trim or pad (if necessary) to ensure same length as test_data
+    if len(arima_preds) > len(test_data):
+        arima_preds = arima_preds[:len(test_data)]
+    if len(ann_preds) > len(test_data):
+        ann_preds = ann_preds[:len(test_data)]
+
     rmse_arima = np.sqrt(mean_squared_error(test_data, arima_preds))
     rmse_ann = np.sqrt(mean_squared_error(test_data, ann_preds))
     
@@ -178,10 +191,8 @@ if __name__ == "__main__":
     print(f"ARIMA RMSE: {rmse_arima}")
     print(f"ANN RMSE: {rmse_ann}")
     
-    # 6. Plotting Results 
-
-[Image of Data Flow Diagram]
- (Conceptual connection)
+    # 6. Plotting Results
+    # (Conceptual Data Flow Diagram omitted)
     plt.figure(figsize=(14, 7))
     
     # Plot Actual Prices
